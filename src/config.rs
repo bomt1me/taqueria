@@ -15,9 +15,8 @@ pub enum Environment {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
     pub environment: Environment,
-    pub redis_conn_str: String,
-    pub redis_queue: String,
-    pub redis_consume_batch_size: isize,
+    pub basepath: String,
+    pub filepath: String,
 }
 
 impl Config {
@@ -78,9 +77,8 @@ mod tests {
         let json = r#"
         {
             "environment": "Local",
-            "redis_conn_str": "",
-            "redis_queue": "taqueria.burrito.recipe",
-            "redis_consume_batch_size": 10
+            "basepath": ".",
+            "filepath": "./assets/carne_asada.dat"
         }"#;
         let mut tmpfile = NamedTempFile::new().unwrap();
         write!(tmpfile, "{json}").unwrap();
@@ -88,7 +86,6 @@ mod tests {
         let old_path = tmpfile.path().as_os_str().to_str().expect("not found");
         let conf = Config::read(String::from(old_path)).unwrap();
         assert!(matches!(conf.environment, Environment::Local));
-        assert_eq!("taqueria.burrito.recipe", conf.redis_queue);
     }
 
     #[test]

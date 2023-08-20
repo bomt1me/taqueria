@@ -1,5 +1,7 @@
+pub mod carne_asade;
 pub mod null;
 
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
@@ -9,14 +11,14 @@ use crate::event::{Event, EventHandler};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RecipeParsed {
-    name: String,
-    guacamole: Vec<i64>,
-    beans: Vec<String>,
+    output: PathBuf,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug)]
 pub struct ParseRecipe {
-    filepath: String,
+    pub basepath: String,
+    pub filepath: String,
+    pub identifier: uuid::Uuid,
 }
 
 pub trait Recipe {
@@ -59,6 +61,14 @@ pub struct RecipeParsedEventHandler {
 
 impl EventHandler<RecipeParsed> for RecipeParsedEventHandler {
     fn handle(&self, event: Event<RecipeParsed>) {
-        self.notifier.success(event.payload.name);
+        self.notifier.success(String::from(
+            event
+                .payload
+                .output
+                .as_os_str()
+                .to_os_string()
+                .to_str()
+                .expect("Could not get path."),
+        ));
     }
 }
