@@ -1,6 +1,5 @@
 {
   "environment": "Local",
-  "redis_conn_str": "redis://localhost:6379",
-  "redis_queue": "taqueria.burrito.recipe",
-  "redis_consume_batch_size": 1
+  "basepath": ".",
+  "filepath": "./assets/carne_asada.dat"
 }
