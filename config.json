@@ -1,5 +1,7 @@
 {
   "environment": "Local",
   "basepath": ".",
-  "filepath": "./assets/carne_asada.dat"
+  "filepath": "./assets/carne_asada.dat",
+  "max_threads": 8,
+  "max_bytes": 102400
 }

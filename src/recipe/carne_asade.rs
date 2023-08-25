@@ -17,8 +17,6 @@ const METADATA_FILENAME: &str = "metadata.json";
 const GUACAMOLE_START_SLICE: &str = ",\"guacamole\":[[";
 const GUACAMOLE_END_SLICE: &str = "]]}";
 const CARNE_ASADA_MAGIC_NUMBER: &str = "CARNE1.0";
-const MAX_THREADS: u32 = 8;
-const MAX_BYTES: u32 = 102_400;
 const DTYPE: u32 = 2;
 
 const STEPS_BY_NAME: [&str; 20] = [
@@ -59,29 +57,29 @@ impl Header {
     #[must_use]
     pub fn parse_date_of_recipe(buffer: &[u8; 512]) -> chrono::NaiveDate {
         let day: u32 = u32::from(u16::from_le_bytes(
-            buffer[128..130].try_into().expect("Could not parse day."),
+            buffer[128..130].try_into().unwrap_or([0, 0]),
         ));
         let month: u32 = u32::from(u16::from_le_bytes(
-            buffer[130..132].try_into().expect("Could not parse month."),
+            buffer[130..132].try_into().unwrap_or([0, 0]),
         ));
         let year: i32 = i32::from(u16::from_le_bytes(
-            buffer[132..134].try_into().expect("Could not parse year."),
+            buffer[132..134].try_into().unwrap_or([0, 0]),
         ));
-        chrono::NaiveDate::from_ymd_opt(year, month, day).expect("Could not parse date.")
+        chrono::NaiveDate::from_ymd_opt(year, month, day).unwrap_or(chrono::NaiveDate::MIN)
     }
 
     #[must_use]
     pub fn parse_time_of_recipe(buffer: &[u8; 512]) -> chrono::NaiveTime {
         let hour: u32 = u32::from(u16::from_le_bytes(
-            buffer[140..142].try_into().expect("Could not parse hour."),
+            buffer[140..142].try_into().unwrap_or([0, 0]),
         ));
         let min: u32 = u32::from(u16::from_le_bytes(
-            buffer[142..144].try_into().expect("Could not parse min."),
+            buffer[142..144].try_into().unwrap_or([0, 0]),
         ));
         let sec: u32 = u32::from(u16::from_le_bytes(
-            buffer[144..146].try_into().expect("Could not parse sec."),
+            buffer[144..146].try_into().unwrap_or([0, 0]),
         ));
-        chrono::NaiveTime::from_hms_opt(hour, min, sec).expect("Could not parse time.")
+        chrono::NaiveTime::from_hms_opt(hour, min, sec).unwrap_or(chrono::NaiveTime::MIN)
     }
 
     #[must_use]
@@ -129,7 +127,9 @@ impl Header {
     }
 }
 
-pub struct CarneAsada {}
+pub struct CarneAsada {
+    pub config: std::rc::Rc<crate::config::Config>,
+}
 
 impl CarneAsada {
     #[must_use]
@@ -224,7 +224,13 @@ impl Recipe for CarneAsada {
 
         let step_count = u32::from(header_data.number_of_steps);
         let total_bytes = header_data.size * step_count * 2;
-        let chunks = Self::calculate_chunks(total_bytes, MAX_BYTES, MAX_THREADS, step_count, DTYPE);
+        let chunks = Self::calculate_chunks(
+            total_bytes,
+            self.config.max_bytes.clone(),
+            self.config.max_threads.clone(),
+            step_count,
+            DTYPE,
+        );
 
         let mut generated_files = Vec::<(usize, u32, String)>::new();
         for chunk in chunks {
@@ -389,7 +395,102 @@ impl CarneAsadaGaucamole {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{Datelike, Timelike};
+
     use super::*;
+
+    #[test]
+    fn test_parse_date_of_recipe() {
+        let mut buffer = [0; 512];
+        buffer[128] = 6;
+        buffer[129] = 0;
+        buffer[130] = 12;
+        buffer[131] = 0;
+        buffer[132] = 231;
+        buffer[133] = 7;
+        let dor = Header::parse_date_of_recipe(&buffer);
+        assert_eq!(dor.year(), 2023);
+        assert_eq!(dor.month(), 12);
+        assert_eq!(dor.day(), 6);
+    }
+
+    #[test]
+    fn test_parse_time_of_recipe() {
+        let mut buffer = [0; 512];
+        buffer[140] = 23;
+        buffer[141] = 0;
+        buffer[142] = 59;
+        buffer[143] = 0;
+        buffer[144] = 59;
+        buffer[145] = 0;
+        let dor = Header::parse_time_of_recipe(&buffer);
+        assert_eq!(dor.hour(), 23);
+        assert_eq!(dor.minute(), 59);
+        assert_eq!(dor.second(), 59);
+    }
+
+    #[test]
+    fn test_parse_steps_when_no_steps() {
+        let buffer = [0; 512];
+        let steps = Header::parse_steps(&buffer);
+        assert_eq!(steps.len(), 12);
+        assert_eq!(steps.iter().all(|i| i.eq(&0)), true);
+    }
+
+    #[test]
+    fn test_parse_steps_when_x() {
+        let mut buffer = [0; 512];
+        buffer[148] = 1;
+        buffer[149] = 0;
+        let steps = Header::parse_steps(&buffer);
+        assert_eq!(steps.len(), 12);
+        assert_eq!(steps[0], 1);
+        assert_eq!(steps[1..].iter().all(|i| i.eq(&0)), true);
+    }
+
+    #[test]
+    fn test_parse_unit_conversion() {
+        let mut buffer = [0; 512];
+        buffer[218] = 232;
+        buffer[219] = 3;
+        let conversions = Header::parse_unit_conversion(&buffer);
+        assert_eq!(conversions[conversions.len() - 1], 1000);
+        assert_eq!(
+            conversions[..conversions.len() - 1]
+                .iter()
+                .all(|c| c.eq(&0)),
+            true
+        );
+    }
+
+    #[test]
+    fn test_parse_size() {
+        let mut buffer = [0; 512];
+        buffer[4] = 224;
+        buffer[5] = 147;
+        buffer[6] = 4;
+        buffer[7] = 0;
+        let header = Header::parse(&buffer);
+        assert_eq!(header.size, 300_000);
+    }
+
+    #[test]
+    fn test_parse_number_of_steps() {
+        let mut buffer = [0; 512];
+        buffer[146] = 12;
+        buffer[147] = 0;
+        let header = Header::parse(&buffer);
+        assert_eq!(header.number_of_steps, 12);
+    }
+
+    #[test]
+    fn test_parse_granularity() {
+        let mut buffer = [0; 512];
+        buffer[262] = 44;
+        buffer[263] = 1;
+        let header = Header::parse(&buffer);
+        assert_eq!(header.granularity, 300);
+    }
 
     #[test]
     fn test_given_empty_then_no_epics() {
