@@ -226,8 +226,8 @@ impl Recipe for CarneAsada {
         let total_bytes = header_data.size * step_count * 2;
         let chunks = Self::calculate_chunks(
             total_bytes,
-            self.config.max_bytes.clone(),
-            self.config.max_threads.clone(),
+            self.config.max_bytes,
+            self.config.max_threads,
             step_count,
             DTYPE,
         );
@@ -434,7 +434,7 @@ mod tests {
         let buffer = [0; 512];
         let steps = Header::parse_steps(&buffer);
         assert_eq!(steps.len(), 12);
-        assert_eq!(steps.iter().all(|i| i.eq(&0)), true);
+        assert!(steps.iter().all(|i| i.eq(&0)));
     }
 
     #[test]
@@ -445,7 +445,7 @@ mod tests {
         let steps = Header::parse_steps(&buffer);
         assert_eq!(steps.len(), 12);
         assert_eq!(steps[0], 1);
-        assert_eq!(steps[1..].iter().all(|i| i.eq(&0)), true);
+        assert!(steps[1..].iter().all(|i| i.eq(&0)));
     }
 
     #[test]
@@ -455,11 +455,10 @@ mod tests {
         buffer[219] = 3;
         let conversions = Header::parse_unit_conversion(&buffer);
         assert_eq!(conversions[conversions.len() - 1], 1000);
-        assert_eq!(
+        assert!(
             conversions[..conversions.len() - 1]
                 .iter()
-                .all(|c| c.eq(&0)),
-            true
+                .all(|c| c.eq(&0))
         );
     }
 
