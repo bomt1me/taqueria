@@ -22,6 +22,7 @@ pub struct ParseRecipe {
 }
 
 pub trait Recipe {
+    fn can_parse(&self, command: &Command<ParseRecipe>) -> bool;
     fn parse(&self, command: &Command<ParseRecipe>) -> Option<Event<RecipeParsed>>;
     fn identifier(&self) -> String;
 }
@@ -46,9 +47,12 @@ impl ParseRecipeCommandHandler {
 impl CommandHandler<ParseRecipe, RecipeParsed> for ParseRecipeCommandHandler {
     fn handle(&self, command: &command::Command<ParseRecipe>) -> Option<Event<RecipeParsed>> {
         for parser in &self.parsers {
-            let result = parser.parse(command);
-            if result.is_some() {
-                return result;
+            if parser.can_parse(command) {
+                let result: Option<Event<RecipeParsed>> = parser.parse(command);
+                if result.is_some() {
+                    return result;
+                }
+                return None;
             }
         }
         None

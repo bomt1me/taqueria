@@ -3,5 +3,5 @@
   "basepath": ".",
   "filepath": "./assets/carne_asada.dat",
   "max_threads": 8,
-  "max_bytes": 102400
+  "max_bytes": 1024000
 }
