@@ -1,4 +1,5 @@
-use crate::{command::Command, event::Event, metadata};
+use crate::metadata::Metadata;
+use crate::{command::Command, event::Event};
 
 use std::cmp::Ordering;
 use std::io::{Seek, SeekFrom, Write};
@@ -16,9 +17,8 @@ const FILENAME: &str = "recipe.json";
 const METADATA_FILENAME: &str = "metadata.json";
 const GUACAMOLE_START_SLICE: &str = ",\"guacamole\":[[";
 const GUACAMOLE_END_SLICE: &str = "]]}";
+const DEFAULT_MAGIC_NUMBER: &str = "00000000";
 const CARNE_ASADA_MAGIC_NUMBER: &str = "CARNE1.0";
-const MAX_THREADS: u32 = 8;
-const MAX_BYTES: u32 = 102_400;
 const DTYPE: u32 = 2;
 
 const STEPS_BY_NAME: [&str; 20] = [
@@ -59,29 +59,29 @@ impl Header {
     #[must_use]
     pub fn parse_date_of_recipe(buffer: &[u8; 512]) -> chrono::NaiveDate {
         let day: u32 = u32::from(u16::from_le_bytes(
-            buffer[128..130].try_into().expect("Could not parse day."),
+            buffer[128..130].try_into().unwrap_or([0, 0]),
         ));
         let month: u32 = u32::from(u16::from_le_bytes(
-            buffer[130..132].try_into().expect("Could not parse month."),
+            buffer[130..132].try_into().unwrap_or([0, 0]),
         ));
         let year: i32 = i32::from(u16::from_le_bytes(
-            buffer[132..134].try_into().expect("Could not parse year."),
+            buffer[132..134].try_into().unwrap_or([0, 0]),
         ));
-        chrono::NaiveDate::from_ymd_opt(year, month, day).expect("Could not parse date.")
+        chrono::NaiveDate::from_ymd_opt(year, month, day).unwrap_or(chrono::NaiveDate::MIN)
     }
 
     #[must_use]
     pub fn parse_time_of_recipe(buffer: &[u8; 512]) -> chrono::NaiveTime {
         let hour: u32 = u32::from(u16::from_le_bytes(
-            buffer[140..142].try_into().expect("Could not parse hour."),
+            buffer[140..142].try_into().unwrap_or([0, 0]),
         ));
         let min: u32 = u32::from(u16::from_le_bytes(
-            buffer[142..144].try_into().expect("Could not parse min."),
+            buffer[142..144].try_into().unwrap_or([0, 0]),
         ));
         let sec: u32 = u32::from(u16::from_le_bytes(
-            buffer[144..146].try_into().expect("Could not parse sec."),
+            buffer[144..146].try_into().unwrap_or([0, 0]),
         ));
-        chrono::NaiveTime::from_hms_opt(hour, min, sec).expect("Could not parse time.")
+        chrono::NaiveTime::from_hms_opt(hour, min, sec).unwrap_or(chrono::NaiveTime::MIN)
     }
 
     #[must_use]
@@ -127,19 +127,74 @@ impl Header {
             granularity: u16::from(buffer[262]) + (u16::from(buffer[263]) << 8),
         }
     }
+
+    #[must_use]
+    pub fn parse_from_file(path: &str) -> Self {
+        let file: File = File::open(path).expect("Could not open file.");
+        let mut reader: BufReader<File> = BufReader::new(file);
+        let mut buffer: [u8; 512] = [0u8; 512];
+        reader.seek(SeekFrom::Start(10)).expect("Could not seek.");
+        reader
+            .read_exact(&mut buffer)
+            .expect("Could not read header buffer");
+        Self::parse(&buffer)
+    }
 }
 
-pub struct CarneAsada {}
+impl Clone for Header {
+    fn clone(&self) -> Self {
+        Self {
+            size: self.size,
+            date_of_recipe: self.date_of_recipe,
+            time_of_recipe: self.time_of_recipe,
+            number_of_steps: self.number_of_steps,
+            steps: self.steps,
+            unit_conversion: self.unit_conversion,
+            granularity: self.granularity,
+        }
+    }
+}
+
+impl From<Header> for Metadata {
+    fn from(val: Header) -> Self {
+        Self {
+            size: val.size,
+            date_of_recipe: val.date_of_recipe,
+            time_of_recipe: val.time_of_recipe,
+            number_of_steps: val.number_of_steps,
+            steps: val
+                .steps
+                .to_vec()
+                .iter()
+                .filter_map(|i| {
+                    if i > &0 {
+                        Some(String::from(STEPS_BY_NAME[*i]))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            units: 1.0,
+            granularity: val.granularity,
+        }
+    }
+}
+
+pub struct CarneAsada {
+    pub config: std::rc::Rc<crate::config::Config>,
+}
 
 impl CarneAsada {
     #[must_use]
     pub fn calculate_chunks(
-        total_bytes: u32,
+        step_count: u16,
+        size: u32,
         max_bytes: u32,
         max_threads: u32,
-        step_count: u32,
         sample_size: u32,
     ) -> Vec<Vec<(u32, u32)>> {
+        let step_count = u32::from(step_count);
+        let total_bytes = size * step_count * 2;
         let mut chunks = Vec::<Vec<(u32, u32)>>::new();
 
         if (step_count * sample_size) < 1 {
@@ -177,60 +232,36 @@ impl CarneAsada {
 }
 
 impl Recipe for CarneAsada {
+    fn can_parse(&self, command: &Command<ParseRecipe>) -> bool {
+        let mut file: File = File::open(&command.payload.filepath).expect("Could not open file.");
+        let mut buffer: [u8; 10] = [0u8; 10];
+        file.read_exact(&mut buffer)
+            .expect("Could not read magic number.");
+        let magic_number = std::str::from_utf8(&buffer[..8]).unwrap_or(DEFAULT_MAGIC_NUMBER);
+        magic_number == CARNE_ASADA_MAGIC_NUMBER
+    }
+
     fn parse(&self, command: &Command<ParseRecipe>) -> Option<Event<RecipeParsed>> {
         let dir = std::sync::Arc::new(
             std::path::Path::new(&command.payload.basepath)
                 .join(command.payload.identifier.to_string()),
         );
         fs::create_dir(dir.as_ref()).expect("Could not create directory.");
-
-        let file: File = File::open(&command.payload.filepath).expect("Could not open file.");
-        let mut reader: BufReader<File> = BufReader::new(file);
-        let mut buffer: [u8; 10] = [0u8; 10];
-        reader
-            .read_exact(&mut buffer)
-            .expect("Could not read magic header buffer");
-        if std::str::from_utf8(&buffer[..8]).expect("Invalid magic number.")
-            != CARNE_ASADA_MAGIC_NUMBER
-        {
-            return None;
-        }
-        let mut header_buffer: [u8; 512] = [0u8; 512];
-        reader
-            .read_exact(&mut header_buffer)
-            .expect("Could not read header buffer");
-        let header_data: Header = Header::parse(&header_buffer);
-        let metadata = metadata::Metadata {
-            size: header_data.size,
-            date_of_recipe: header_data.date_of_recipe,
-            time_of_recipe: header_data.time_of_recipe,
-            number_of_steps: header_data.number_of_steps,
-            steps: header_data
-                .steps
-                .to_vec()
-                .iter()
-                .filter_map(|i| {
-                    if i > &0 {
-                        Some(String::from(STEPS_BY_NAME[*i]))
-                    } else {
-                        None
-                    }
-                })
-                .collect(),
-            units: 1.0,
-            granularity: header_data.granularity,
-        };
+        let header_data: Header = Header::parse_from_file(&command.payload.filepath);
+        let metadata: Metadata = header_data.clone().into();
         metadata.store(dir.join(METADATA_FILENAME));
-
-        let step_count = u32::from(header_data.number_of_steps);
-        let total_bytes = header_data.size * step_count * 2;
-        let chunks = Self::calculate_chunks(total_bytes, MAX_BYTES, MAX_THREADS, step_count, DTYPE);
-
+        let chunks = Self::calculate_chunks(
+            header_data.number_of_steps,
+            header_data.size,
+            self.config.max_bytes,
+            self.config.max_threads,
+            DTYPE,
+        );
         let mut generated_files = Vec::<(usize, u32, String)>::new();
         for chunk in chunks {
             let mut threads = Vec::new();
             for thread in chunk {
-                let dir = dir.clone();
+                let dir = std::sync::Arc::clone(&dir);
                 let filepath = command.payload.filepath.clone();
                 threads.push(thread::spawn(move || {
                     CarneAsadaGaucamole::parse_guacamole(
@@ -248,14 +279,11 @@ impl Recipe for CarneAsada {
                 generated_files.append(&mut t.join().expect("Could not join thread."));
             }
         }
-
         generated_files.sort_by(|a, b| match a.0.cmp(&b.0) {
             Ordering::Equal => a.1.cmp(&b.1),
             other => other,
         });
-
         CarneAsadeFile::merge(&dir, &generated_files);
-
         Some(Event {
             event_type: 0,
             payload: RecipeParsed {
@@ -389,7 +417,99 @@ impl CarneAsadaGaucamole {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{Datelike, Timelike};
+
     use super::*;
+
+    #[test]
+    fn test_parse_date_of_recipe() {
+        let mut buffer = [0; 512];
+        buffer[128] = 6;
+        buffer[129] = 0;
+        buffer[130] = 12;
+        buffer[131] = 0;
+        buffer[132] = 231;
+        buffer[133] = 7;
+        let dor = Header::parse_date_of_recipe(&buffer);
+        assert_eq!(dor.year(), 2023);
+        assert_eq!(dor.month(), 12);
+        assert_eq!(dor.day(), 6);
+    }
+
+    #[test]
+    fn test_parse_time_of_recipe() {
+        let mut buffer = [0; 512];
+        buffer[140] = 23;
+        buffer[141] = 0;
+        buffer[142] = 59;
+        buffer[143] = 0;
+        buffer[144] = 59;
+        buffer[145] = 0;
+        let dor = Header::parse_time_of_recipe(&buffer);
+        assert_eq!(dor.hour(), 23);
+        assert_eq!(dor.minute(), 59);
+        assert_eq!(dor.second(), 59);
+    }
+
+    #[test]
+    fn test_parse_steps_when_no_steps() {
+        let buffer = [0; 512];
+        let steps = Header::parse_steps(&buffer);
+        assert_eq!(steps.len(), 12);
+        assert!(steps.iter().all(|i| i.eq(&0)));
+    }
+
+    #[test]
+    fn test_parse_steps_when_x() {
+        let mut buffer = [0; 512];
+        buffer[148] = 1;
+        buffer[149] = 0;
+        let steps = Header::parse_steps(&buffer);
+        assert_eq!(steps.len(), 12);
+        assert_eq!(steps[0], 1);
+        assert!(steps[1..].iter().all(|i| i.eq(&0)));
+    }
+
+    #[test]
+    fn test_parse_unit_conversion() {
+        let mut buffer = [0; 512];
+        buffer[218] = 232;
+        buffer[219] = 3;
+        let conversions = Header::parse_unit_conversion(&buffer);
+        assert_eq!(conversions[conversions.len() - 1], 1000);
+        assert!(conversions[..conversions.len() - 1]
+            .iter()
+            .all(|c| c.eq(&0)));
+    }
+
+    #[test]
+    fn test_parse_size() {
+        let mut buffer = [0; 512];
+        buffer[4] = 224;
+        buffer[5] = 147;
+        buffer[6] = 4;
+        buffer[7] = 0;
+        let header = Header::parse(&buffer);
+        assert_eq!(header.size, 300_000);
+    }
+
+    #[test]
+    fn test_parse_number_of_steps() {
+        let mut buffer = [0; 512];
+        buffer[146] = 12;
+        buffer[147] = 0;
+        let header = Header::parse(&buffer);
+        assert_eq!(header.number_of_steps, 12);
+    }
+
+    #[test]
+    fn test_parse_granularity() {
+        let mut buffer = [0; 512];
+        buffer[262] = 44;
+        buffer[263] = 1;
+        let header = Header::parse(&buffer);
+        assert_eq!(header.granularity, 300);
+    }
 
     #[test]
     fn test_given_empty_then_no_epics() {
@@ -399,13 +519,12 @@ mod tests {
 
     #[test]
     fn test_given_size_less_than_max_then_one_epic() {
-        let total_bytes = 10000;
+        let size: u32 = 2000;
         let max_bytes = 1024;
         let steps = 3;
         let sample_size = 2;
         let max_threads = 3;
-        let chunks =
-            CarneAsada::calculate_chunks(total_bytes, max_bytes, max_threads, steps, sample_size);
+        let chunks = CarneAsada::calculate_chunks(steps, size, max_bytes, max_threads, sample_size);
         assert_eq!(chunks.len(), 4);
         assert_eq!(chunks[0].len(), 3);
         assert_eq!(chunks[0][2], (2040, 3060));

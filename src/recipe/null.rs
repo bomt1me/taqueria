@@ -7,6 +7,13 @@ use super::{ParseRecipe, Recipe, RecipeParsed};
 pub struct Null {}
 
 impl Recipe for Null {
+    fn can_parse(&self, command: &Command<ParseRecipe>) -> bool {
+        if command.payload.filepath == String::new() {
+            return true;
+        }
+        false
+    }
+
     fn parse(&self, _command: &Command<ParseRecipe>) -> Option<Event<RecipeParsed>> {
         Some(Event {
             event_type: 0,

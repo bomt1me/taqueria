@@ -17,6 +17,8 @@ pub struct Config {
     pub environment: Environment,
     pub basepath: String,
     pub filepath: String,
+    pub max_threads: u32,
+    pub max_bytes: u32,
 }
 
 impl Config {
@@ -78,7 +80,9 @@ mod tests {
         {
             "environment": "Local",
             "basepath": ".",
-            "filepath": "./assets/carne_asada.dat"
+            "filepath": "./assets/carne_asada.dat",
+            "max_threads": 8,
+            "max_bytes": 102400
         }"#;
         let mut tmpfile = NamedTempFile::new().unwrap();
         write!(tmpfile, "{json}").unwrap();
